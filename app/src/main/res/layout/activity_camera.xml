@@ -27,13 +27,15 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
-        <Button
-            android:id="@+id/btn_recent_capture"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Recent"
-            android:layout_marginEnd="8dp"/>
+        <ImageView
+            android:id="@+id/iv_recent_thumbnail"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:scaleType="centerCrop"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:layout_marginEnd="8dp"
+            android:contentDescription="Most recent capture thumbnail"
+            android:src="@drawable/ic_launcher_background"  />
 
         <Button
             android:id="@+id/btn_capture"
