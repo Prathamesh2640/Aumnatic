@@ -2,6 +2,7 @@ package com.project.cameraapp;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.camera.core.Camera;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageCapture;
 import androidx.camera.core.ImageCaptureException;
@@ -46,24 +47,34 @@ public class CameraActivity extends AppCompatActivity {
     private PreviewView previewView;
     private ImageCapture imageCapture;
     private Button captureButton;
+    private Button flipButton;
     private ImageView recentThumbnailImageView;
 
     private File outputDirectory;
-
     private ListenableFuture<ProcessCameraProvider> cameraProviderFuture;
+    private CameraSelector currentCameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
+    private ProcessCameraProvider cameraProvider;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_camera);
 
+
         previewView = findViewById(R.id.previewView);
         captureButton = findViewById(R.id.btn_capture);
+        flipButton = findViewById(R.id.btn_flip);
         recentThumbnailImageView = findViewById(R.id.iv_recent_thumbnail);
+
 
         outputDirectory = new File(getExternalFilesDir(Environment.DIRECTORY_PICTURES), "CameraApp");
         if (!outputDirectory.exists()) {
-            outputDirectory.mkdirs();
+            boolean created = outputDirectory.mkdirs();
+            if (!created) {
+                Log.e(TAG, "Failed to create output directory: " + outputDirectory.getAbsolutePath());
+                Toast.makeText(this, "Failed to prepare storage.", Toast.LENGTH_SHORT).show();
+
+            }
         }
 
 
@@ -75,21 +86,28 @@ public class CameraActivity extends AppCompatActivity {
                     this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS);
         }
 
-        captureButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                takePhoto();
-            }
-        });
+
+        captureButton.setOnClickListener(v -> takePhoto());
+
+
+        flipButton.setOnClickListener(v -> flipCamera());
+
 
         recentThumbnailImageView.setOnClickListener(v -> {
-            Toast.makeText(this, "Recent thumbnail clicked (Stage 5 functionality)", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Recent thumbnail clicked!", Toast.LENGTH_SHORT).show();
             // TODO: Implement viewing full image in a later stage if desired
         });
     }
 
+
     private boolean allPermissionsGranted() {
         for (String permission : REQUIRED_PERMISSIONS) {
+
+            if ((permission.equals(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) ||
+                    permission.equals(android.Manifest.permission.READ_EXTERNAL_STORAGE)) &&
+                    android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                continue;
+            }
 
             if (ContextCompat.checkSelfPermission(
                     this, permission) != PackageManager.PERMISSION_GRANTED) {
@@ -106,11 +124,12 @@ public class CameraActivity extends AppCompatActivity {
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
             if (allPermissionsGranted()) {
                 startCamera();
-                loadRecentThumbnail(); // New: Load thumbnail after permissions
+                loadRecentThumbnail();
             } else {
+
                 Toast.makeText(this,
-                        "Permissions not granted by the user. Closing camera.",
-                        Toast.LENGTH_SHORT).show();
+                        "Camera and storage permissions are required to use this app. Please grant them in settings.",
+                        Toast.LENGTH_LONG).show();
                 finish();
             }
         }
@@ -121,45 +140,84 @@ public class CameraActivity extends AppCompatActivity {
 
         cameraProviderFuture.addListener(() -> {
             try {
-                ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
+                cameraProvider = cameraProviderFuture.get();
                 bindCameraUseCases(cameraProvider);
             } catch (ExecutionException | InterruptedException e) {
-                Log.e(TAG, "Error starting camera: " + e.getMessage());
-                Toast.makeText(this, "Error starting camera.", Toast.LENGTH_SHORT).show();
+                // Stage 7: Improved error logging and user feedback
+                Log.e(TAG, "Failed to get camera provider: " + e.getMessage(), e);
+                Toast.makeText(this, "Error initializing camera. Please restart the app.", Toast.LENGTH_LONG).show();
                 finish();
             }
         }, ContextCompat.getMainExecutor(this));
     }
 
     private void bindCameraUseCases(@NonNull ProcessCameraProvider cameraProvider) {
+
         Preview preview = new Preview.Builder().build();
         preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
-        CameraSelector cameraSelector = new CameraSelector.Builder()
-                .requireLensFacing(CameraSelector.LENS_FACING_BACK)
-                .build();
 
         imageCapture = new ImageCapture.Builder()
                 .setTargetRotation(previewView.getDisplay().getRotation())
                 .build();
 
         try {
+
             cameraProvider.unbindAll();
-            cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture);
-            Log.d(TAG, "Camera preview and ImageCapture bound successfully.");
+
+
+            if (!cameraProvider.hasCamera(currentCameraSelector)) {
+                String cameraType = (currentCameraSelector == CameraSelector.DEFAULT_FRONT_CAMERA) ? "Front" : "Rear";
+                Toast.makeText(this, cameraType + " camera not available.", Toast.LENGTH_SHORT).show();
+                Log.w(TAG, cameraType + " camera not available. Binding might fail or fall back.");
+
+                currentCameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
+                if (!cameraProvider.hasCamera(currentCameraSelector)) {
+                    Toast.makeText(this, "No camera available on this device.", Toast.LENGTH_LONG).show();
+                    finish(); // No cameras available, exit
+                    return;
+                }
+            }
+
+
+            Camera camera = cameraProvider.bindToLifecycle(this, currentCameraSelector, preview, imageCapture);
+            Log.d(TAG, "Camera use cases bound successfully with " +
+                    (currentCameraSelector == CameraSelector.DEFAULT_FRONT_CAMERA ? "Front" : "Rear") + " camera.");
+
         } catch (Exception exc) {
-            Log.e(TAG, "Use case binding failed", exc);
-            Toast.makeText(this, "Failed to bind camera use cases.", Toast.LENGTH_SHORT).show();
+
+            Log.e(TAG, "Use case binding failed: " + exc.getMessage(), exc);
+            Toast.makeText(this, "Failed to bind camera. " + exc.getMessage(), Toast.LENGTH_LONG).show();
             finish();
         }
     }
 
+
+    private void flipCamera() {
+        if (cameraProvider == null) {
+            Toast.makeText(this, "Camera not initialized yet.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        if (currentCameraSelector == CameraSelector.DEFAULT_BACK_CAMERA) {
+            currentCameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA;
+        } else {
+            currentCameraSelector = CameraSelector.DEFAULT_BACK_CAMERA;
+        }
+
+
+        bindCameraUseCases(cameraProvider);
+        Toast.makeText(this, "Camera flipped!", Toast.LENGTH_SHORT).show();
+    }
+
+
     private void takePhoto() {
         if (imageCapture == null) {
-            Log.e(TAG, "ImageCapture not initialized.");
+            Log.e(TAG, "ImageCapture not initialized. Cannot take photo.");
             Toast.makeText(this, "Camera not ready. Please try again.", Toast.LENGTH_SHORT).show();
             return;
         }
+
 
         String fileName = new SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS", Locale.US)
                 .format(System.currentTimeMillis()) + ".jpg";
@@ -169,6 +227,9 @@ public class CameraActivity extends AppCompatActivity {
         ImageCapture.OutputFileOptions outputOptions =
                 new ImageCapture.OutputFileOptions.Builder(photoFile).build();
 
+
+        Toast.makeText(this, "Capturing photo...", Toast.LENGTH_SHORT).show();
+
         imageCapture.takePicture(
                 outputOptions,
                 ContextCompat.getMainExecutor(this),
@@ -176,16 +237,17 @@ public class CameraActivity extends AppCompatActivity {
                     @Override
                     public void onImageSaved(@NonNull ImageCapture.OutputFileResults outputFileResults) {
                         Uri savedUri = outputFileResults.getSavedUri() != null ? outputFileResults.getSavedUri() : Uri.fromFile(photoFile);
-                        String msg = "Photo capture succeeded: " + savedUri;
+                        String msg = "Photo saved successfully!";
                         Toast.makeText(getBaseContext(), msg, Toast.LENGTH_SHORT).show();
-                        Log.d(TAG, msg);
+                        Log.d(TAG, "Photo capture succeeded: " + savedUri);
                         updateRecentThumbnail(photoFile);
                     }
 
                     @Override
                     public void onError(@NonNull ImageCaptureException exc) {
+
                         String msg = "Photo capture failed: " + exc.getMessage();
-                        Toast.makeText(getBaseContext(), msg, Toast.LENGTH_SHORT).show();
+                        Toast.makeText(getBaseContext(), msg, Toast.LENGTH_LONG).show();
                         Log.e(TAG, msg, exc);
                     }
                 }
@@ -198,6 +260,7 @@ public class CameraActivity extends AppCompatActivity {
             updateRecentThumbnail(mostRecentFile);
         } else {
             recentThumbnailImageView.setImageDrawable(null);
+            recentThumbnailImageView.setContentDescription("No recent capture");
         }
     }
 
@@ -206,15 +269,17 @@ public class CameraActivity extends AppCompatActivity {
         int targetHeight = recentThumbnailImageView.getHeight();
 
         if (targetWidth <= 0 || targetHeight <= 0) {
-            targetWidth = 64; // Default thumbnail size
-            targetHeight = 64;
+            targetWidth = 120;
+            targetHeight = 120;
         }
 
         Bitmap thumbnail = decodeSampledBitmapFromFile(imageFile.getAbsolutePath(), targetWidth, targetHeight);
         if (thumbnail != null) {
             recentThumbnailImageView.setImageBitmap(thumbnail);
+            recentThumbnailImageView.setContentDescription("Most recent capture: " + imageFile.getName());
         } else {
             recentThumbnailImageView.setImageDrawable(null);
+            recentThumbnailImageView.setContentDescription("Failed to load recent capture");
             Log.e(TAG, "Failed to create thumbnail for: " + imageFile.getAbsolutePath());
         }
     }
@@ -244,16 +309,19 @@ public class CameraActivity extends AppCompatActivity {
         return files[0];
     }
 
+
     public static Bitmap decodeSampledBitmapFromFile(String path, int reqWidth, int reqHeight) {
         final BitmapFactory.Options options = new BitmapFactory.Options();
         options.inJustDecodeBounds = true;
         BitmapFactory.decodeFile(path, options);
+
 
         options.inSampleSize = calculateInSampleSize(options, reqWidth, reqHeight);
 
         options.inJustDecodeBounds = false;
         return BitmapFactory.decodeFile(path, options);
     }
+
 
     public static int calculateInSampleSize(BitmapFactory.Options options, int reqWidth, int reqHeight) {
         final int height = options.outHeight;
